@@ -1,7 +1,11 @@
-""" Functions for parsing .yaml files in natural_mixtures/olfactometer_configs"""
+""" Functions for parsing .yaml files in natural_mixtures/olfactometer_configs
+
+Attributes:
+        OLF_PROC_DIR (Path):
+"""
 from itertools import chain
 from pathlib import Path
-from typing import List
+from typing import List, Union
 
 import numpy as np
 import pandas as pd
@@ -10,8 +14,13 @@ import yaml
 from pydantic_models import PinOdor
 
 OLF_PROC_DIR = Path("/local/storage/Remy/natural_mixtures/olfactometer_configs")
+"""Path: path to directory holding olfactometer config files."""
+
 relative_file_path = True
+"""boolean: whether or not files should be loaded relative to OLF_PROC_DIR"""
+
 balance_pins = {2, 42}
+"""set: pins used as flow balance pins on olfactometer (discount as an odor stimulus) """
 
 abbreviations = {'kiwi approx.': 'kiwi',
                  'ethyl acetate': 'ea',
@@ -19,10 +28,19 @@ abbreviations = {'kiwi approx.': 'kiwi',
                  'isoamyl alcohol': 'IaOH',
                  'isoamyl acetate': 'IaA',
                  'ethanol': 'EtOH'}
+"""dict: odor name abbreviations"""
 
 
 def load_olf_config(yaml_file, relative_path=relative_file_path):
-    """ Loads olfactometer config files. """
+    """ Loads olfactometer config files as dict.
+
+     Args:
+        yaml_file (Union[Path, str]): config yaml filename
+        relative_path (bool): whether to load relative to OLF_PROC_DIR
+
+    Returns:
+        olf_config (dict): dict with keys ['pin_sequence', 'pins2odors', 'settings']
+     """
     if '\\' in yaml_file:
         yaml_file = Path(*yaml_file.split('\\'))
     if relative_path:
@@ -34,10 +52,21 @@ def load_olf_config(yaml_file, relative_path=relative_file_path):
     return olf_config
 
 
-# %%
-
 def parse_pin_odors(olf_config, lookup_abbrev=True):
-    """ Converts olf_config['pins2odors'] into a dictionary mapping {<pin #> : PinOdor}"""
+    """ Converts olf_config['pins2odors']  into a dictionary mapping {<pin #> : PinOdor}
+
+    Args:
+        olf_config (dict): dictionary loaded from olfactometer config .yaml
+        lookup_abbrev (bool): whether to lookup odor abbreviations from `abbreviations`
+
+    Returns:
+        pins2odors (dict): key = pin #, value = PinOdor(...)
+
+    Examples::
+        olf_config = olf_conf.load_olf_config('20220209_210002_stimuli.yaml')\n
+        pins2odors = olf_conf.parse_pin_odors(olf_config)\
+
+    """
     pins2odors = {k: PinOdor.parse_obj(v) for k, v in olf_config['pins2odors'].items()}
     if lookup_abbrev:
         for k, v in pins2odors.items():
@@ -62,18 +91,21 @@ def pin_list_to_odors(pin_list: List[List[int]], pins2odors: dict):
 
 
 def get_unique_pin_odors(flat_stim_list):
-    """ Returns unique PinOdor instances from a flat list.
-
-    Examples:
-        >>>> from itertools import chain
-        >>>> flat_stim_list = list(chain(*stim_list))
-        >>>> u_pin_odors = get_unique_pin_odors(flat_stim_list)
+    """
+    Returns unique PinOdor instances from a flat list.
 
     Args:
-        flat_stim_list:
+        flat_stim_list (List[PinOdor])
 
     Returns:
-        unique_pin_odors ( List[PinOdor] )
+        unique_pin_odors (List[PinOdor]) :
+
+
+    Examples::
+
+    >>>> from itertools import chain
+    >>>> flat_stim_list = list(chain(*stim_list))
+    >>>> u_pin_odors = get_unique_pin_odors(flat_stim_list)
 
     """
     unique_odors = {item.json() for item in flat_stim_list}
@@ -93,17 +125,8 @@ def get_name_to_log10conc(flat_stim_list):
     Returns:
         odor2conc (dict)
 
-    Examples:
-        >>>> name2conc = get_name_to_log10conc(flat_stim_list)
-        >>>> print(name2conc)
-
-        {'ethanol': [-2.0],
-         'ethyl acetate': [-4.2],
-         'ethyl butyrate': [-3.5],
-         'isoamyl acetate': [-3.7],
-         'isoamyl alcohol': [-3.6],
-         'kiwi approx.': [0.0, -1.0, -2.0],
-         'pfo': [0.0] }
+    Examples::
+    name2conc = get_name_to_log10conc(flat_stim_list)
 
     """
     u_pin_odors = get_unique_pin_odors(flat_stim_list)
@@ -117,8 +140,14 @@ def get_name_to_log10conc(flat_stim_list):
 
 def pin_odors_to_dataframe(pin_odors):
     """
-    Converts a list(list(PinOdor)) into a dataframe with odor names as columns, and the concentration of each odor
+    Converts nested lists of PinOdor items into a dataframe w/ odor names as columns, and concentrations of each odor
     (if delivered) for each stimulus trial.
+
+    Args:
+        pin_odors (List[List[PinOdor]]): get w/ function parse_pin_odors(...)
+
+    Returns:
+        df_pins2odors (pd.DataFrame):
     """
 
     odor_names = list({item.name for item in chain(*pin_odors)})
@@ -128,18 +157,48 @@ def pin_odors_to_dataframe(pin_odors):
 
     for i, odors in enumerate(pin_odors):
         for odor in odors:
-            if odor.log10_conc is not None:
+            if odor.log10_conc is None:
+                df_stimuli.loc[i, odor.name] = float('-inf')
+            #if odor.log10_conc is not None:
+            else:
                 df_stimuli.loc[i, odor.name] = odor.log10_conc
     return df_stimuli
 
 
-def pins2odors_to_dataframe(olf_config: dict):
-    """Converts olf_config['pins2odors'] into a dataframe, with pin # as the index."""
+def pins2odors_to_dataframe(olf_config):
+    """Converts olf_config['pins2odors'] into a dataframe, with pin # as the index.
+
+    Args:
+        olf_config (dict) :
+            loaded from olfactometer config .yaml file \n
+            olf_conf.load_olf_config('20220209_210002_stimuli.yaml')
+
+    Returns:
+        df (pd.DataFrame): table w/ columns = ['name', 'log10_conc'], index = [{pin #s}]
+
+    Examples::
+                      name   log10_conc
+            --------------- -----------
+        37  isoamyl alcohol        -3.6 \n
+        38   ethyl butyrate        -3.5 \n
+        39     kiwi approx.        -1.0 \n
+        40              pfo         0.0 \n
+        41     kiwi approx.        -2.0 \n
+        49     kiwi approx.         0.0 \n
+        51          ethanol        -2.0 \n
+        52    ethyl acetate        -4.2 \n
+        53  isoamyl acetate        -3.7 \n
+
+    """
     df = pd.DataFrame(list(olf_config['pins2odors'].values()),
                       index=olf_config['pins2odors'].keys())
     df = df.loc[:, ['name', 'log10_conc']]
     return df
 
+
+def remove_null_conc(pin_odor_list):
+    """ Returns pin odors non-null log10_conc values"""
+    return list(filter(lambda x: x.log10_conc is not None, pin_odor_list))
 
 # %%
 def main(config_yaml):
@@ -161,6 +220,7 @@ if __name__ == "__main__":
     fly_acqs, flat_acqs = manifestos.main()
     for lacq in flat_acqs:
         olf_config, pins2odors, pin_list, pin_odors, df_pins2odors, df_stimuli = main(lacq.olf_config)
+
         SAVE_DIR = NAS_PROC_DIR.joinpath(lacq.date_imaged, str(lacq.fly_num), lacq.thorimage)
 
         print('')
@@ -170,12 +230,4 @@ if __name__ == "__main__":
         df_pins2odors.to_csv(SAVE_DIR.joinpath('df_pins2odors.csv'))
         print('csv files saved successfully.')
 
-# odor_names = sorted(list({item.name for item in pins2odors.values()}))
 
-
-# %%
-# pd.DataFrame([tuple(item.dict().values()) for item in flat_stim_list],
-#             columns=['name', 'conc', 'abbrev'])
-
-# olf_config = load_olf_config(flat_acqs[0].olf_config)
-# pins2odors = parse_pin_odors(olf_config)

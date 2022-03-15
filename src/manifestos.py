@@ -1,5 +1,6 @@
 # code for parsing information in natural_mixtures/manifestos
-
+import json
+from pathlib import Path
 from typing import List
 
 import pydantic
@@ -69,3 +70,12 @@ def main():
 
 if __name__ == '__main__':
     fly_acqs, flat_acqs = main()
+
+    # write flat_acqs to .json file
+    file = Path("/local/storage/Remy/natural_mixtures/manifestos/flat_linked_thor_acquisitions.json")
+    dat = [item.dict() for item in flat_acqs]
+    with open(file, 'w') as f:
+        json.dump(dat, f, indent=4)
+
+
+
