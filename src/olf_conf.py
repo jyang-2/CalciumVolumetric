@@ -159,7 +159,7 @@ def pin_odors_to_dataframe(pin_odors):
         for odor in odors:
             if odor.log10_conc is None:
                 df_stimuli.loc[i, odor.name] = float('-inf')
-            #if odor.log10_conc is not None:
+            # if odor.log10_conc is not None:
             else:
                 df_stimuli.loc[i, odor.name] = odor.log10_conc
     return df_stimuli
@@ -200,6 +200,20 @@ def remove_null_conc(pin_odor_list):
     """ Returns pin odors non-null log10_conc values"""
     return list(filter(lambda x: x.log10_conc is not None, pin_odor_list))
 
+
+def preprocess_pin_odor_list(pin_odor_list,
+                             sort_key=lambda x: x.name):
+    """Sorts List[PinOdor], and removes odors w/ log10_conc=None"""
+    proc_pin_odor_list = sorted(pin_odor_list, key=sort_key, reverse=False)
+
+    proc_pin_odor_list = remove_null_conc(proc_pin_odor_list)
+
+    if len(proc_pin_odor_list) == 0:
+        return [PinOdor(name='paraffin', log10_conc=0, abbrev='pfo')]
+    else:
+        return proc_pin_odor_list
+
+
 # %%
 def main(config_yaml):
     olf_config = load_olf_config(config_yaml)
@@ -217,6 +231,7 @@ def main(config_yaml):
 
 if __name__ == "__main__":
     import manifestos
+
     fly_acqs, flat_acqs = manifestos.main()
     for lacq in flat_acqs:
         olf_config, pins2odors, pin_list, pin_odors, df_pins2odors, df_stimuli = main(lacq.olf_config)
@@ -229,5 +244,3 @@ if __name__ == "__main__":
         df_stimuli.to_csv(SAVE_DIR.joinpath("df_stimuli.csv"))
         df_pins2odors.to_csv(SAVE_DIR.joinpath('df_pins2odors.csv'))
         print('csv files saved successfully.')
-
-

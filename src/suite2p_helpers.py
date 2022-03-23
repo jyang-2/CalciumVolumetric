@@ -16,8 +16,6 @@ def get_suite2p_folder(file):
     Returns:
         (Path): Path to top 'suite2p' folder.
     """
-
-
     if isinstance(file, str):
         file = Path(file)
 
@@ -70,34 +68,54 @@ def load_bin_files_from_suite2p(s2p_path):
     save_dir.mkdir(parents=True, exist_ok=True)
     utils2p.save_img(s2p_path.joinpath('reg_stack.tif'), reg_stack)
     return reg_stack
-#%%
 
-NAS_PROC_DIR = Path("/local/storage/Remy/natural_mixtures/processed_data/2022-02-11")
-combined_ops_files = list(NAS_PROC_DIR.rglob("combined/ops.npy"))
 
-for ops_file in combined_ops_files:
-    c_ops = np.load(ops_file, allow_pickle=True).item()
+def get_n_pixels_per_cell(stat_file):
+    stat = np.load(stat_file, allow_pickle=True)
+    pix_per_cell = np.zeros(stat.size)
+    for n in range(stat.size):
+        pix_per_cell[n] = stat[n]['ypix'][~stat[n]['overlap']].size
+    return pix_per_cell
 
-    # get suite2p folder
-    s2p_path = suite2p.io.utils.get_suite2p_path(ops_file)
 
-    print('')
-    print(ops_file)
-    print(s2p_path)
+def overwrite_iscell(iscell_file, iscell_new):
+    iscell = np.load(iscell_file, allow_pickle=True)
+    n_cells = iscell.shape[0]
+    if iscell_new.dtype == np.bool_:
+        iscell_new = iscell_new*1.0
+    iscell_to_save = np.zeros_like(iscell)
+    iscell_to_save[:, 0] = iscell_new
+    np.save(iscell_file, iscell_to_save)
+    return iscell_file
 
-    # get binary files for registered movies, and sort by plane
-    bin_files = list(s2p_path.rglob("plane*/*.bin"))
-    bin_files.sort(key=lambda x: path_to_plane(x))
-
-    # load and combine registered planes
-    reg_stack = np.stack([load_plane_from_bin(item).data for item in bin_files])
-    print('stack created')
-    print(f"shape: {reg_stack.shape}")
-
-    save_dir = s2p_path.with_name('s2p_reg_tif')
-    save_dir.mkdir(parents=True, exist_ok=True)
-    utils2p.save_img(save_dir.joinpath('reg_stack.tif'), reg_stack)
-    print("registed tiff stack saved.")
+# DEMO/EXAMPLE
+#
+# NAS_PROC_DIR = Path("/local/storage/Remy/natural_mixtures/processed_data/2022-02-11")
+# combined_ops_files = list(NAS_PROC_DIR.rglob("combined/ops.npy"))
+#
+# for ops_file in combined_ops_files:
+#     c_ops = np.load(ops_file, allow_pickle=True).item()
+#
+#     # get suite2p folder
+#     s2p_path = suite2p.io.utils.get_suite2p_path(ops_file)
+#
+#     print('')
+#     print(ops_file)
+#     print(s2p_path)
+#
+#     # get binary files for registered movies, and sort by plane
+#     bin_files = list(s2p_path.rglob("plane*/*.bin"))
+#     bin_files.sort(key=lambda x: path_to_plane(x))
+#
+#     # load and combine registered planes
+#     reg_stack = np.stack([load_plane_from_bin(item).data for item in bin_files])
+#     print('stack created')
+#     print(f"shape: {reg_stack.shape}")
+#
+#     save_dir = s2p_path.with_name('s2p_reg_tif')
+#     save_dir.mkdir(parents=True, exist_ok=True)
+#     utils2p.save_img(save_dir.joinpath('reg_stack.tif'), reg_stack)
+#     print("registed tiff stack saved.")
 
 
 
@@ -106,21 +124,21 @@ for ops_file in combined_ops_files:
 
 #%% save registered tiff to save_path0
 
-c_ops = np.load(ops_file, allow_pickle=True).item()
-save_file = Path(c_ops['save_path']).joinpath('s2p_reg_tif', 'reg_stack.tif')
-save_file.parent.mkdir(parents=True, exist_ok=True)
-utils2p.save_img(save_file, reg_stack)
-#%%
-
-
-#%%%
-folder = Path("/local/storage/Remy/natural_mixtures/processed_data/2022-02-10/1/kiwi/downsampled_3")
-
-fpath = "{parent}/suite2p/plane{plane:d}/{tiff_file}"
-tiff_files = list(folder.rglob("*/reg_tif/*.tif"))
-tiff_files.sort(key=lambda x: parse.search(fpath, str(x))['plane'])
-
-movies = cm.load_movie_chain(tiff_files, is3D=True)
-
-
+# c_ops = np.load(ops_file, allow_pickle=True).item()
+# save_file = Path(c_ops['save_path']).joinpath('s2p_reg_tif', 'reg_stack.tif')
+# save_file.parent.mkdir(parents=True, exist_ok=True)
+# utils2p.save_img(save_file, reg_stack)
+# #%%
+#
+#
+# #%%%
+# folder = Path("/local/storage/Remy/natural_mixtures/processed_data/2022-02-10/1/kiwi/downsampled_3")
+#
+# fpath = "{parent}/suite2p/plane{plane:d}/{tiff_file}"
+# tiff_files = list(folder.rglob("*/reg_tif/*.tif"))
+# tiff_files.sort(key=lambda x: parse.search(fpath, str(x))['plane'])
+#
+# movies = cm.load_movie_chain(tiff_files, is3D=True)
+#
+#
 

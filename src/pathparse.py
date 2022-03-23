@@ -5,11 +5,27 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import parse
 import seaborn as sns
 
 NAS_PROC_DIR = Path("/local/storage/Remy/natural_mixtures/processed_data")
 
 stat_file_list = sorted(list(NAS_PROC_DIR.rglob('downsampled_3/**/combined/stat.npy')))
+
+
+def get_mongodb_query(filepath):
+    """ Creates mongodb query w/ fields date_imaged, fly_num, and thorimage_name.
+
+    Examples::
+
+        dquery = pathparse.get_mongodb_query("/local/storage/Remy/natural_mixtures/
+                    processed_data/2022-02-11/1/kiwi_ea_eb_only/downsampled_3")
+
+        lacq = db[ 'linked_thor_acq_collection'].find_one(dquery)
+
+    """
+    date_imaged, fly_num, thorimage_name = get_mov_dir(filepath).parts[-3:]
+    return dict(date_imaged=date_imaged, fly_num=int(fly_num), thorimage_name=thorimage_name)
 
 
 def is_date_matching(date_str):
@@ -43,6 +59,8 @@ def get_date_from_path(filepath):
 
 
 def get_mov_dir(stat_file):
+    if isinstance(stat_file, str):
+        stat_file = Path(stat_file)
     return NAS_PROC_DIR.joinpath(*stat_file.relative_to(NAS_PROC_DIR).parts[:3])
 
 
@@ -51,7 +69,58 @@ def load_trial_timing(stat_file):
     return timestamps
 
 
+def get_downsampling_dir(filepath):
+    """
+    Returns path to folder w/ downsampled data. Folder should be named something like 'downsampled_3'.
+
+    If there is no downsampling directory in the filepath, returns None.
+    """
+    if isinstance(filepath, str):
+        filepath = Path(filepath)
+    for folder in filepath.parents:
+        if 'downsampled_' in folder.name:
+            return folder
+    return None
+
+
+def tsub_from_path(filepath):
+    """Extracts temporal downsampling factor from filepath."""
+
+    dsub_folder = get_downsampling_dir(filepath)
+    if dsub_folder is not None:
+        return temporal_downsampling_factor(dsub_folder.name)
+    else:
+        return 1
+
+
+def temporal_downsampling_factor(folder_name):
+    """ Parse folder name (ex: 'downsampled_3') for downsampling factor.
+
+    Temporal downsampling factor has either no prefix ('downsampled_3') or '_tsub' prefix ('downsampled_tsub3')
+
+    Args:
+        folder_name (str): directory name (contains substring 'downsampled')
+
+    Returns:
+        tsub (int): temporal downsampling factor, default tsub=1 if no downsampling
+    """
+
+    if 'tsub' in folder_name:
+        r = parse.search("_tsub{tsub:d}", folder_name)
+    else:
+        r = parse.search("_{tsub:d}", folder_name)
+
+    if r is None:
+        tsub = 1
+    else:
+        tsub = r['tsub']
+
+    return tsub
+
+
 def get_timestamps_rel_path(stat_file):
+    if isinstance(stat_file, str):
+        stat_file = Path(stat_file)
     return Path(*stat_file.relative_to(NAS_PROC_DIR).parts[:3], 'timestamps.npy')
 
 

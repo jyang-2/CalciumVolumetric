@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
-
 from rastermap.mapping import Rastermap
 from scipy.stats import zscore
 
@@ -9,6 +9,52 @@ plt.rcParams['pdf.fonttype'] = 42
 suite2p_ops = {'n_components': 1, 'n_X': 100, 'alpha': 1., 'K': 1.,
                'nPC': 200, 'constraints': 2, 'annealing': True, 'init': 'pca',
                }
+
+
+def get_vmin(imdata, baseline_prctile=20, cell_prctile=30):
+    """Compute vmin for displaying rasterplots.
+
+    Args:
+        imdata ():
+        baseline_prctile ():
+        cell_prctile ():
+
+    Returns:
+        vmin (np.float): recommended vmin value for rasterplot colormap
+
+    Example::
+
+        ax.imshow(raster_imdata,<br>
+                        aspect='auto', cmap='gray_r',<br>
+                        vmin=get_vmin(raster_imdata, 20, 30),<br>
+                        vmax=get_vmax(raster_imdata, 90, 90))<br>
+
+    """
+    bl = np.percentile(imdata, baseline_prctile, axis=1)
+    return np.percentile(imdata, cell_prctile)
+
+
+def get_vmax(imdata, peak_prctile=90, cell_prctile=90):
+    """Compute vmax for displaying rasterplots.
+
+    Args:
+        imdata ():
+        baseline_prctile ():
+        cell_prctile ():
+
+    Returns:
+        vmin (np.float): recommended vmin value for rasterplot colormap
+
+    Example::
+
+        ax.imshow(raster_imdata,<br>
+                        aspect='auto', cmap='gray_r',<br>
+                        vmin=get_vmin(raster_imdata, 20, 30),<br>
+                        vmax=get_vmax(raster_imdata, 90, 90))<br>
+
+    """
+    bl = np.percentile(imdata, peak_prctile, axis=1)
+    return np.percentile(imdata, cell_prctile)
 
 
 def suite2p_reordered_trial_display(sp, df_stimulus, frametimes, nbin=None, nplotrows=400,
@@ -53,13 +99,20 @@ def suite2p_reordered_trial_display(sp, df_stimulus, frametimes, nbin=None, nplo
     return fig, axarr
 
 
-    fig.suptitle(f"{title_str}\nconc = {blk_conc}")
+def compute_cluster_trace(cells_x_time, xid):
+    uxid = np.unique(xid)
+    n_clust = uxid.size
+    mean_clust_traces = np.zeros((n_clust, cells_x_time.shape[1]))
+
+    for i, iclust in enumerate(uxid):
+        mean_clust_traces[i, :] = np.nanmean(cells_x_time[xid==iclust, :], axis=0)
+    return mean_clust_traces, uxid
 
 
 
 def norm_traces(traces):
     traces = np.squeeze(traces)
-    traces = zscore(traces, axis=1)
+    traces = zscore(traces, axis=-1)
     traces = np.maximum(-4, np.minimum(8, traces)) + 4
     traces /= 12
     return traces
