@@ -1,0 +1,85 @@
+metadata_files:
+  - 'Experiment.xml'
+  - 'stim_list.json'
+  - 'timestamps.npy'
+---
+suite2p_processing:
+  suite2p_outputs_files:
+    - 'stat.npy'
+    - 'Fall.mat'
+  steps:
+    convert-to-xarray:
+      description: >
+      "Takes the information contained in Fall.mat, and converts it to an xr.Dataset,
+       which also contains relevant metadata (see metadata_files) such as timestamps, stimulus information,
+       and stimulus timing information."
+      inputs:
+        - 'Fall.mat'
+        - 'timestamps.npy'
+        - 'stim_list.json'
+      outputs:
+        - 'xrds_suite2p_outputs.nc'
+
+    initial-rastermap-embedding:
+      description: "Run rastermap on Fc, and save results to 'embedding_allcells.npy'"
+      cmd:
+      inputs:
+        - 'F.npy'
+        - 'Fneu.npy'
+      outputs:
+        - 'embedding_allcells.npy'
+        - 'embedding_allcells_asdict.npy'
+
+    plot-initial-embedding:
+      code: rasterplot.plot_initial_rastermap_clustering(...)
+      description: > 
+      "Loads xrds_suite2p_outputs.nc into xarray, add rastermap embedding results, 
+      and plot the clusters."
+      inputs:
+        - 'embedding_allcells.npy'
+        - 'xrds_suite2p_outputs.nc'
+      outputs:
+        - 'rastermap_embedding_allcells.pdf'
+
+    select-good-xids:
+      description: "Pick which of the rastermap clusters are responsive, and save this information to 
+      rastermap_embedding_allcells.npy."
+      inputs: ~
+      outputs: ~
+
+    plot-bulk-fluorescence:
+      code: plot_F_tot.py
+
+    make-trial-gifs:
+      code: gifs.py
+      description: >
+      "Combines suite2p registration results into a 4D hyperstack, and a xr.DataArray.
+      Then, splits into z-summed tiff files w/ time interval (-5, 20, 0.5) around `olf_ict`."
+
+    rastermap-round-two:
+      code: src/s2p/rastermap_round_two.py
+      inputs: xrds_suite2p_outputs_xid0.nc
+      description: >
+        "Loads xrds_"
+
+    cluster_rastermap:
+      code:
+        file: src/s2p/cluster_rastermap
+        structure:
+          cluster_rastermap
+            - get_flow() : options include which type, and save filepath (relative to input filepath)
+            - run(type=['xid0' or 'xid1'],
+            -
+      inputs: xrds_suite2p_outputs_xid0.nc or xrds_suite2p_outputs_xid1.nc
+
+    rastermap_cluster_cca:
+      code: src/s2p/rastermap_cluster_cca.py
+      inputs: xrds_suite2p_outputs_xid1.nc
+      description: >
+        " Given 2 rastermap clusterings in the form of xr.DataArrays, convert to  "
+        
+    plot_F_tot:
+      code:
+      notes:
+        > load file (xrds_suite2p_outputs_xid1.nc
+        

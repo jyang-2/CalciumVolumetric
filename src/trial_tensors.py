@@ -1,4 +1,5 @@
 import numpy as np
+import xarray as xr
 from scipy.interpolate import interp1d
 
 
@@ -28,7 +29,7 @@ def split_traces_to_trials(cells_x_time, ts, stim_ict, trial_ts):
     F_trials = []
 
     for ict in stim_ict:
-        F_trials.append(interp_traces(trial_ts+ict))
+        F_trials.append(interp_traces(trial_ts + ict))
 
     return F_trials
 
@@ -52,7 +53,7 @@ def make_trial_tensor(cells_x_time, ts, stim_ict, trial_ts):
         trial_ts (np.ndarray): timestamps for trial interval, with stim_ict corresponding to 0
 
     Returns:
-        (List[np.ndarray]): cell x trial subarrays, split according to trial_ts.
+        (np.ndarray): cell x trial subarrays, split according to trial_ts.
 
     Examples:
         >>>> trial_timestamps = np.arange(-5, 20, 0.5)
@@ -63,3 +64,55 @@ def make_trial_tensor(cells_x_time, ts, stim_ict, trial_ts):
     F_trials = split_traces_to_trials(cells_x_time, ts, stim_ict, trial_ts)
     trial_tensor = np.stack(F_trials, axis=0)
     return trial_tensor
+
+
+def make_xrds_trial_tensor(ds, trial_ts=None):
+    """
+    Takes xarray dataset w/ dims (cells, time) and converts into (trials, cells, time).
+
+    Args:
+        ds (xr.Dataset): has dims (cells, time)
+        trial_ts (np.ndarray): 1D time vector, for time interval around stimulus onset
+                                (t=0 is when the stimulus turns on)
+
+    Returns:
+        xr.Dataset: has dims (trials, cells, time)
+
+    """
+    if trial_ts is None:
+        trial_ts = np.arange(-5, 20, 0.5)
+
+    attrs = ds.attrs.copy()
+
+    dim_names = list(ds.coords.dims)
+    coord_names = list(ds.coords.keys())
+    nondim_coords = [item for item in coord_names if item not in dim_names]
+
+    # create values for new dataset dimensions
+    n_trials = len(ds.attrs['stim'])
+    cell_var = list(ds.dims)[0]
+    cells = ds.coords[cell_var].to_numpy()
+
+    data_vars = {}
+    for k, v in ds.data_vars.items():
+        trials_x_cells_x_time = make_trial_tensor(v.to_numpy(),
+                                                  ts=ds.time.to_numpy(),
+                                                  stim_ict=ds.attrs['olf_ict'],
+                                                  trial_ts=trial_ts)
+        data_vars[k] = (("trials", cell_var, "time"), trials_x_cells_x_time)
+
+    ds_trial_tensors = xr.Dataset(
+        data_vars=data_vars,
+        coords={'trials': range(n_trials),
+                cell_var: cells,
+                'time': trial_ts,
+                'stim': ('trials', ds.attrs['stim'])
+                },
+        attrs=attrs
+    )
+    # copy non-time dimension coords over
+    for cname in nondim_coords:
+        if 'time' not in ds.coords[cname].dims:
+            ds_trial_tensors = ds_trial_tensors.assign_coords({cname: (ds.coords[cname].dims, ds.coords[cname].values)})
+
+    return ds_trial_tensors
