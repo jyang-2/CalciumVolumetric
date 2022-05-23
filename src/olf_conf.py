@@ -27,7 +27,16 @@ abbreviations = {'kiwi approx.': 'kiwi',
                  'ethyl butyrate': 'eb',
                  'isoamyl alcohol': 'IaOH',
                  'isoamyl acetate': 'IaA',
-                 'ethanol': 'EtOH'}
+                 'ethanol': 'EtOH',
+                 '1-octen-3-ol': '1o3ol',
+                 '2-heptanone': '2h',
+                 'methyl salicylate': 'ms',
+                 'valeric acid': 'va',
+                 'pentanoic acid': 'va',
+                 'furfural': 'fur',
+                 'control mix': 'cmix'}
+
+
 """dict: odor name abbreviations"""
 
 
