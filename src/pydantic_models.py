@@ -1,8 +1,10 @@
 import typing
+from pathlib import Path
 from typing import List
 
 import pydantic
 
+NAS_PROC_DIR = Path("/local/storage/Remy/natural_mixtures/processed_data")
 
 class Fly(pydantic.BaseModel):
     date_imaged: str
@@ -32,6 +34,18 @@ class FlatFlyAcquisitions(pydantic.BaseModel):
     thorimage: str = pydantic.Field(...)
     thorsync: str = pydantic.Field(...)
     olf_config: str = pydantic.Field(...)
+    movie_type: typing.Optional[str]
+    s2p_stat_file: typing.Optional[str]
+
+    def filename_base(self):
+        return f"{self.date_imaged}__fly{self.fly_num:02}__{self.thorimage}"
+
+    def rel_mov_dir(self):
+        return Path('.').joinpath(self.date_imaged, str(self.fly_num), self.thorimage)
+
+    def mov_dir(self, relative_to=NAS_PROC_DIR):
+        mov_dir = relative_to.joinpath(*self.rel_mov_dir().parts)
+        return mov_dir
 
 
 class LinkedThorAcquisition(pydantic.BaseModel):
@@ -68,11 +82,16 @@ class PinOdor(pydantic.BaseModel):
     log10_conc: typing.Optional[float]
     abbrev: typing.Optional[str]
 
-    def str(self, use_abbrev=True):
-        if use_abbrev and self.abbrev is not None:
-            return f"{self.abbrev} @ {self.log10_conc}"
+    def str(self, use_abbrev=True, round_whole_conc=False):
+        if round_whole_conc and self.log10_conc.is_integer():
+            log10_conc = int(self.log10_conc)
         else:
-            return f"{self.name} @ {self.log10_conc}"
+            log10_conc = self.log10_conc
+
+        if use_abbrev and self.abbrev is not None:
+            return f"{self.abbrev} @ {log10_conc}"
+        else:
+            return f"{self.name} @ {log10_conc}"
 
     def as_name_tuple(self):
         return self.name, self.log10_conc
@@ -127,15 +146,15 @@ class PinOdorMixture(pydantic.BaseModel):
         else:
             return [(item.name, item.log10_conc) for item in self.pin_odor_list]
 
-    def as_str(self, use_abbrev=True):
+    def as_str(self, use_abbrev=True, round_whole_conc=False):
         """
         Returns:
             List[str] : ['ea @ -6.2', 'eb @ -5.5', ...] if abbrev=False
         """
 
-        return [x.str(use_abbrev=use_abbrev) for x in self.pin_odor_list]
+        return [x.str(use_abbrev=use_abbrev, round_whole_conc=round_whole_conc) for x in self.pin_odor_list]
 
-    def as_flat_str(self, use_abbrev=True):
+    def as_flat_str(self, use_abbrev=True, round_whole_conc=False):
         """ Converts odor mixture into readable string, for plotting stimulus label text
 
         Returns:
@@ -143,9 +162,10 @@ class PinOdorMixture(pydantic.BaseModel):
 
         """
         if len(self.pin_odor_list) == 1:
-            return self.pin_odor_list[0].str(use_abbrev=use_abbrev)
+            return self.pin_odor_list[0].str(use_abbrev=use_abbrev, round_whole_conc=False)
         else:
-            return ", ".join([item.str(use_abbrev=use_abbrev) for item in self.pin_odor_list])
+            return ", ".join([item.str(use_abbrev=use_abbrev, round_whole_conc=False)
+                              for item in self.pin_odor_list])
 
     def __eq__(self, other):
         return set(self.as_tuple()) == set(other.as_tuple())
@@ -159,3 +179,14 @@ class PinOdorListList(pydantic.BaseModel):
 class PinOdorMixtureList(pydantic.BaseModel):
     """ Class for generating nested json files for PinOdorMixtures"""
     __root__: List[PinOdorMixture]
+
+
+class CaimanMocoMetrics(pydantic.BaseModel):
+    """Class for metrics.json file in caiman_mc folder"""
+
+    bord_px_rig: List[int]
+    bord_px_els: List[int]
+    bad_planes_rig: typing.Optional[List[int]]
+    bad_planes_els: typing.Optional[List[int]]
+    which_movie: typing.Literal['m_els', 'm_rig']
+
