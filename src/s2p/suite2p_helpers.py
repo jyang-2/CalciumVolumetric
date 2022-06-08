@@ -355,7 +355,7 @@ def get_label_image(stat_file):
 if __name__ == '__main__':
     import xarray as xr
     DATA_DIR = Path("/local/storage/Remy/for_dhruvs_paper")
-    stat_files = sorted(list(DATA_DIR.rglob('stat.npy')))
+    stat_files = sorted(list(DATA_DIR.rglob('8/**/stat.npy')))
 
     for stat_file in stat_files:
         stats = np.load(stat_file, allow_pickle=True)
