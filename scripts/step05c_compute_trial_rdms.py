@@ -1,19 +1,14 @@
-import matplotlib
-
-import ryeutils
-
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
-
 import copy
-import xarray as xr
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
-from scipy.spatial.distance import pdist, squareform
-import natmixconfig
-
 import seaborn as sns
+import xarray as xr
+from scipy.spatial.distance import pdist, squareform
+
+import natmixconfig
+import ryeutils
 
 STAT_DIR_INPUT_FILES = [
     "xrds_suite2p_respvec_mean_peak.nc",
@@ -53,6 +48,34 @@ stim_ord = ['pfo @ 0.0',
 
 
 # %%
+def _rdm_over_trialavg(da_peak_trialavg, metric='correlation'):
+    """Computes representation dissimilarity matrix between trials, w/ specified distance metric.
+
+        Args:
+            da_peak_trialavg (xr.DataArray): response peak amplitudes w/ dims (trials x cells)
+            metric (str): distance metric, anything that scipy.distance.pdist takes
+
+        Returns:
+            xr.DataArray: RDM returned by `squareform(pdist(..., metric=metric))`, with dims =
+                            ('trial_row', 'trial_col')
+    """
+    stim = da_peak_trialavg.stim.to_numpy()
+    trials = np.arange(len(stim))
+
+    distmat = squareform(pdist(da_peak_trialavg, metric=metric))
+    da_trialavg_rdm = xr.DataArray(name=metric,
+                                data=distmat,
+                                dims=['trial_row', 'trial_col'],
+                                coords=dict(
+                                        trial_row=trials,
+                                        trial_col=trials,
+                                        stim_row=('trial_row', stim),
+                                        stim_col=('trial_col', stim),
+                                ),
+                                )
+    return da_trialavg_rdm
+
+
 def _rdm_over_trials(da_peak, metric='correlation'):
     """Computes representation dissimilarity matrix between trials, w/ specified distance metric.
 
@@ -161,14 +184,30 @@ def main(flacq,
             .where(ds_peak.xid0.isin(ds_peak.attrs['good_xid']), drop=True) \
             .sortby(['xid0', 'embedding0'])
 
+        ########################
+        # compute peak amp trial average
+        #########################
+        ds_peak_trialavg = ds_peak.groupby('stim').mean('trials')
+        ds_peak_trialavg = ds_peak_trialavg.assign_coords(
+                trials=('stim', np.arange(ds_peak_trialavg.dims['stim'])
+                        )
+        )
+        ds_peak_trialavg = ds_peak_trialavg.assign_attrs(copy.deepcopy(ds_peak.attrs))
+
         stim_list = ds_peak.stim.to_numpy().tolist()
 
         for metric in metrics:
             ds_rdm = rdm_over_trials(ds_peak, metric=metric, copy_attrs=True)
-
-            # tidy
+            ds_rdm_trialavg = rdm_over_trials(ds_peak_trialavg,
+                                              metric=metric,
+                                              copy_attrs=True)
+            # tidy: df_rdm
             df_rdm = ds_rdm.to_dataframe()
             df_rdm = df_rdm.set_index(['stim_row', 'stim_col'], append=True)
+
+            # tidy: df_rdm_trialavg
+            df_rdm_trialavg = ds_rdm_trialavg.to_dataframe()
+            df_rdm_trialavg = df_rdm_trialavg.set_index(['stim_row', 'stim_col'], append=True)
 
             if save_files:
 
@@ -183,20 +222,43 @@ def main(flacq,
                 for output_dir in [output_dir0, output_dir1]:
                     output_dir.mkdir(parents=True, exist_ok=True)
 
-                    # save netcdf xarray
-                    output_filename = f"{flacq.filename_base()}__trialRDM__{respvec}__{metric}.nc"
+                    # --------------------------------
+                    # set output file naming convention
+                    # --------------------------------
+                    prefix_type = 'consistent'
+
+                    if prefix_type == 'flacq_filename_base':
+                        filename_prefix = flacq.filename_base()
+                    elif prefix_type == 'consistent':
+                        filename_prefix = f'xrds_suite2p_respvec'
+                    # -------------------
+                    # save netcdf xarray - full RDM
+                    # -------------------
+                    output_filename = f"{filename_prefix}__trialRDM__{respvec}__{metric}.nc"
                     ds_rdm.to_netcdf(output_dir.joinpath(output_filename))
 
                     # save in long format
-                    output_filename = f"{flacq.filename_base()}__trialRDM__{respvec}__{metric}__tidy.csv"
+                    output_filename = f"{filename_prefix}__trialRDM__{respvec}__{metric}__tidy.csv"
                     df_rdm.to_csv(output_dir.joinpath(output_filename))
 
+                    # -------------------
+                    # save netcdf xarray - trialavg RDM
+                    # -------------------
+                    output_filename = f"{filename_prefix}__trialavgRDM__{respvec}__{metric}.nc"
+                    ds_rdm_trialavg.to_netcdf(output_dir.joinpath(output_filename))
+
+                    # save in long format
+                    output_filename = f"{filename_prefix}__trialavgRDM__{respvec}_" \
+                                      f"_{metric}__tidy.csv"
+                    df_rdm_trialavg.to_csv(output_dir.joinpath(output_filename))
+
                     # save as multisheet excel file
-                    output_filename = f"{flacq.filename_base()}__trialRDM__{respvec}__{metric}.xlsx"
+                    # -----------------------------
+                    output_filename = f"{filename_prefix}__trialRDM__{respvec}__{metric}.xlsx"
                     with pd.ExcelWriter(output_dir.joinpath(output_filename)) as writer:
                         mi_row = pd.MultiIndex.from_frame(
-                            ds_rdm.trial_row.to_dataframe()
-                            )
+                                ds_rdm.trial_row.to_dataframe()
+                        )
                         mi_col = pd.MultiIndex.from_frame(
                                 ds_rdm.trial_col.to_dataframe()
                         )
@@ -208,6 +270,8 @@ def main(flacq,
                             df.to_excel(writer, sheet_name=k)
 
             if make_plots:
+                # each trial
+                # ----------
                 title_str = f"{flacq.filename_base()}\nrespvec={respvec}, metric={metric}"
 
                 fig, axarr = plt.subplots(1, 2, figsize=(11, 8.5), constrained_layout=True)
@@ -219,6 +283,21 @@ def main(flacq,
                 output_filename = f"{flacq.filename_base()}__{respvec}__{metric}.png"
                 fig.savefig(output_dir0.joinpath(output_filename))
                 fig.savefig(output_dir0.joinpath(output_filename).with_suffix('.pdf'))
+
+                # trialavg
+                # ---------
+                title_str = f"{flacq.filename_base()}\nrespvec={respvec}, metric={metric}: trial " \
+                            f"avg."
+
+                fig2, axarr2 = plt.subplots(1, 2, figsize=(11, 8.5), constrained_layout=True)
+                for ax, data_var in zip(axarr2.flat, ['Fc_zscore', 'Fc_zscore_smoothed']):
+                    plot_rdm(ds_rdm_trialavg, data_var=data_var, ax=ax, metric=metric)
+                    fig2.suptitle(title_str)
+
+                # save figures
+                output_filename = f"{flacq.filename_base()}__{respvec}__{metric}__trialavg.png"
+                fig2.savefig(output_dir0.joinpath(output_filename))
+                fig2.savefig(output_dir0.joinpath(output_filename).with_suffix('.pdf'))
 
     return True
 
@@ -328,18 +407,32 @@ def make_rdm_tidy(ds_rdm, dim_order=['trial_row', 'trial_col'], stim_order=None)
 def get_label_locs(label_list):
     labels, runs = ryeutils.find_runs(label_list)
 
-    block_start = np.cumsum(runs) - runs[0]
-    loc_in_block = (np.array(runs) - 1) / 2
+    block_end = np.cumsum(runs)
 
-    tick_locs = list(block_start + loc_in_block)
+    # loc_in_block = (np.array(runs) - 1) / 2
+    # tick_locs = list(block_start + loc_in_block + 0.5)
+
+    loc_in_block = np.array(runs) / 2.
+    tick_locs = np.cumsum(runs) - np.array(runs) / 2
+
     tick_labels = labels
     return tick_labels, tick_locs
 
 
-def plot_rdm(rdm, data_var=None, ax=None, rep_matrix_type='rdm', metric='correlation'):
+def get_gridline_locs(label_list):
+    labels, runs = ryeutils.find_runs(label_list)
+    block_end = np.cumsum(runs)
+    return block_end[:-1]
+
+
+def plot_rdm(rdm, data_var=None, ax=None, rep_matrix_type='rdm',
+             metric='correlation',
+             stim_row=None, stim_col=None, row_coord_key='stim_row', col_coord_key='stim_col',
+             axes_style='darkgrid'):
     """
 
     Args:
+        metric ():
         rdm ():
         data_var ():
         ax ():
@@ -379,9 +472,14 @@ def plot_rdm(rdm, data_var=None, ax=None, rep_matrix_type='rdm', metric='correla
     elif rep_matrix_type == 'rsa':
         da_plot = da_rdm
 
+    if stim_col is None:
+        stim_col = da_plot[col_coord_key].to_numpy()
+    if stim_row is None:
+        stim_row = da_plot[row_coord_key].to_numpy()
+
     df_plot = pd.DataFrame(da_plot.to_numpy(),
-                           index=da_plot.stim_row.to_numpy(),
-                           columns=da_plot.stim_col.to_numpy())
+                           index=stim_row,
+                           columns=stim_col)
 
     # sns.heatmap(df_plot,
     #              cmap='RdBu_r',
@@ -400,22 +498,30 @@ def plot_rdm(rdm, data_var=None, ax=None, rep_matrix_type='rdm', metric='correla
         vmin, vmax = (-1, 1)
         cmap = 'Spectral_r'
 
-    sns.heatmap(da_plot.to_numpy(),
-                cmap=cmap,
-                vmin=vmin, vmax=vmax,
-                square=True,
-                ax=ax,
-                cbar_kws=dict(shrink=0.25)
-                )
+    with sns.axes_style("darkgrid"):
+        sns.heatmap(da_plot.to_numpy(),
+                    cmap=cmap,
+                    vmin=vmin, vmax=vmax,
+                    square=True,
+                    ax=ax,
+                    cbar_kws=dict(shrink=0.5)
+                    )
 
-    ylabels, ylocs = get_label_locs(da_plot.stim_row.to_numpy())
-    xlabels, xlocs = get_label_locs(da_plot.stim_col.to_numpy())
+
+
+    ylabels, ylocs = get_label_locs(stim_row)
+    xlabels, xlocs = get_label_locs(stim_col)
 
     ax.set_xticks(xlocs)
     ax.set_xticklabels(xlabels, rotation=90)
 
     ax.set_yticks(ylocs)
     ax.set_yticklabels(ylabels, rotation=0)
+
+    for y in get_gridline_locs(stim_row):
+        ax.axhline(y, linewidth=0.2, color='w')
+    for x in get_gridline_locs(stim_col):
+        ax.axvline(x, linewidth=0.2, color='w')
 
     ax.set_title(title_str)
     return ax
@@ -498,4 +604,3 @@ def test_method():
     # fig.suptitle(title_str)
     plt.show()
     return True
-
