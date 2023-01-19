@@ -1,10 +1,13 @@
 import typing
-from pathlib import Path
 from typing import List
 
 import pydantic
 
-NAS_PROC_DIR = Path("/local/storage/Remy/natural_mixtures/processed_data")
+from natmixconfig import *
+
+
+# NAS_PROC_DIR = Path("/local/storage/Remy/natural_mixtures/processed_data")
+# NAS_PROC_DIR = Path("/local/matrix/Remy-Data/projects/natural_mixtures/processed_data")
 
 class Fly(pydantic.BaseModel):
     date_imaged: str
@@ -34,8 +37,12 @@ class FlatFlyAcquisitions(pydantic.BaseModel):
     thorimage: str = pydantic.Field(...)
     thorsync: str = pydantic.Field(...)
     olf_config: str = pydantic.Field(...)
-    movie_type: typing.Optional[str]
-    s2p_stat_file: typing.Optional[str]
+    movie_type: typing.Optional[str] = pydantic.Field(...)
+    s2p_stat_file: typing.Optional[str] = pydantic.Field(...)
+    bad_trials: typing.Optional[List]
+    imaging_type: typing.Optional[str]
+    # smovie_type: pydantic.Field(...)  # typing.Optional[str]
+    # s2p_stat_file: typing.Optional[str]
 
     def filename_base(self):
         return f"{self.date_imaged}__fly{self.fly_num:02}__{self.thorimage}"
@@ -46,6 +53,39 @@ class FlatFlyAcquisitions(pydantic.BaseModel):
     def mov_dir(self, relative_to=NAS_PROC_DIR):
         mov_dir = relative_to.joinpath(*self.rel_mov_dir().parts)
         return mov_dir
+
+    def stat_file(self, relative_to=None):
+        if self.s2p_stat_file is not None:
+            stat_file = Path('.').joinpath(self.s2p_stat_file)
+        else:
+            stat_file = None
+
+        if relative_to is not None:
+            stat_file = relative_to / stat_file
+
+        return stat_file
+
+    def has_s2p_stat_file(self):
+        return self.s2p_stat_file is not None
+
+    def is_pair(self):
+        if self.movie_type in ['kiwi_ea_eb_only', 'control1_top2_ramps']:
+            return True
+        else:
+            return False
+
+    def panel(self):
+        if 'kiwi' in self.movie_type:
+            panel = 'kiwi'
+        elif 'control' in self.movie_type:
+            panel = 'control'
+        elif 'validation0' in self.movie_type:
+            panel = 'validation'
+        elif 'validation1' in self.movie_type:
+            panel = 'validation'
+        elif 'megamat' in self.movie_type:
+            panel = 'megamat'
+        return panel
 
 
 class LinkedThorAcquisition(pydantic.BaseModel):
@@ -189,4 +229,3 @@ class CaimanMocoMetrics(pydantic.BaseModel):
     bad_planes_rig: typing.Optional[List[int]]
     bad_planes_els: typing.Optional[List[int]]
     which_movie: typing.Literal['m_els', 'm_rig']
-
