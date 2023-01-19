@@ -114,10 +114,6 @@ how to group concatenated RDMs?
 ...{OUTPUT_DIR}/{imaging_type}/{panel}_{respvec}_{metric}.nc
 ...{OUTPUT_DIR}/{imaging_type}/{panel}_{respvec}_{metric}_trialavg.nc
 
-Save plots separately, in {NAS_PRJ_DIR}/intermediate_plots
-- RDM_trials_concat
-    -
-
 Generate list of possible flat_acq lists, iterate through, and save to file
 
 
@@ -144,6 +140,7 @@ import pandas as pd
 import pydantic
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
+from parse import parse
 from sklearn import preprocessing
 from sklearn.model_selection import ParameterGrid
 
@@ -196,47 +193,53 @@ respvec_params = dict(respvec='mean_peak',
 RDM_OUTPUT_DIR = "analysis_outputs/by_imaging_type/{imaging_type}/{panel}/RDM_concat"
 
 RESPVEC_OUTPUT_DIR = "analysis_outputs/by_imaging_type/{imaging_type}/{panel}/respvec_concat"
+
+RESPVEC_OUTPUT_FILENAME = "respvec_agg__{respvec}__trialavg{trialavg}__goodxids{" \
+                          "good_xids_only}__stdize_{ufunc_name}.nc"
+
+
+def fix_string_serialized_attrs(d):
+    fixed_d = copy.deepcopy(d)
+
+    for k, v in fixed_d.items():
+        if v in ['True', 'False']:
+            fixed_d[k] = bool(v)
+        elif v == 'None':
+            fixed_d[k] = None
+
+    return fixed_d
+
+
+def parse_respvec_params_from_filename(filename, convert_dtypes=True):
+    results = parse(RESPVEC_OUTPUT_FILENAME, filename)
+    if convert_dtypes:
+        parsed_params = fix_string_serialized_attrs(results.named)
+    else:
+        parsed_params = results.named
+    return parsed_params
+
+
 # %%
 
-# panel_param_grid:
-# ---------------
-# stores all combinations of options for `imaging_type` and `panel` (i.e. which
-# FlatFlyAcquisitions to process/aggregate)
-#
-# rdm_param:
-# ---------
-prj = natmixconfig.prj
-
-if prj == 'odor_space_collab':
-    panel_param_grid = dict(
-            imaging_type=['kc_soma', 'pn_boutons'],
-            panel='megamat'
-    )
-
-    for panel_param in ParameterGrid(panel_param_grid):
-        print(f'\npanel_param:\n------------')
-        print(panel_param)
-
-        rdm_param_grid = dict(
-                respvec=['mean_peak', 'max_peak'],
-                metric=['correlation', 'cosine']
-        )
-        print('\nrdm_param:')
-        for rdm_param in ParameterGrid(rdm_param_grid):
-            print(f"  - {rdm_param.__str__()}")
-#%%
-def get_respvec_param_combinations():
+def get_respvec_param_combinations(
+        respvec=['mean_peak', 'max_peak'],
+        trialavg=[True, False],
+        good_xids_only=[True, False],
+        ufunc_name=[None, 'robust_scale', 'quantile_transform', 'scale'],
+):
     """Get a list of all possible parameter combinations for aggregating respvec datasets."""
-
 
     # standardization_ufunc = [(getattr(preprocessing, k), v)
     #                          for k, v in ufunc_kwargs_lookup.items()]
 
+    # respvec_param_grid_options = dict(
+    #         respvec=['mean_peak', 'max_peak'],
+    #         trialavg=[True, False],
+    #         good_xids_only=[True, False],
+    #         ufunc_name=[None, 'robust_scale', 'quantile_transform', 'scale'],
+    # )
     respvec_param_grid_options = dict(
-            respvec=['mean_peak', 'max_peak'],
-            trialavg=[True, False],
-            good_xids_only=[True, False],
-            ufunc_name=[None, 'robust_scale', 'quantile_transform', 'scale'],
+            respvec=respvec, trialavg=trialavg, good_xids_only=good_xids_only, ufunc_name=ufunc_name
     )
     respvec_param_grid = list(ParameterGrid(respvec_param_grid_options))
 
@@ -252,9 +255,11 @@ def get_respvec_param_combinations():
                 params['ufunc_kwargs'] = None
             else:
                 params['standardize'] = True
-                params['ufunc']=getattr(preprocessing, params['ufunc_name'])
-                params['ufunc_kwargs'] = ufunc_kwargs_lookup
+                params['ufunc'] = getattr(preprocessing, params['ufunc_name'])
+                params['ufunc_kwargs'] = ufunc_kwargs_lookup[params['ufunc_name']]
     return respvec_param_grid
+
+
 # %%
 
 def load_rdms_by_flacq(flat_acq, respvec, metric, trialavg=False):
@@ -404,6 +409,11 @@ def process_ds_respvec_list(ds_respvec_list,
         # ----------------
         if trialavg:
             ds = ds_respvec0.groupby('stim').mean('trials')
+            ds = ds.assign_coords(abbrev=('stim',
+                                          [item.split('@')[0].strip() for item in
+                                           ds.stim.to_numpy()]
+                                          ),
+                                  )
             core_dims = [['cells', 'stim']]
         else:
             ds = ds_respvec0.sortby('stim').reset_index('trials')
@@ -430,7 +440,7 @@ def process_ds_respvec_list(ds_respvec_list,
                     kwargs=ufunc_kwargs
             )
         else:
-            ds_standardized = ds_good
+            ds_standardized = ds_good.transpose()
 
         ds_processed_respvec_list.append(ds_standardized)
 
@@ -449,7 +459,43 @@ def combine_respvecs(ds_processed_respvec_list):
     ds_respvec_cat = xr.concat(ds_processed_respvec_list, 'cells')
     return ds_respvec_cat
 
-def aggregate_respvecs(flat_acq_py)
+
+def aggregate_respvecs(flat_acq_list,
+                       respvec='mean_peak',
+                       trialavg=True,
+                       good_xids_only=False,
+                       standardize=False,
+                       ufunc=None,
+                       ufunc_kwargs=None,
+                       **kwargs):
+    """Top-level function for combining respvec datasets with different preprocessing options.
+
+    """
+
+    # make attr dict from respvec parameters
+    attrs = dict(
+            respvec=respvec, trialavg=trialavg, good_xids_only=good_xids_only,
+            standardize=standardize,
+            ufunc=ufunc.__name__ if ufunc is not None else None
+    )
+    if ufunc_kwargs is not None:
+        for k, v in ufunc_kwargs.items():
+            attrs[f"{ufunc.__name__}__{k}"] = v
+
+    ds_respvec_list = load_respvecs_by_flacq_list(flat_acq_list, respvec)
+    ds_processed_respvec_list = process_ds_respvec_list(ds_respvec_list,
+                                                        trialavg=trialavg,
+                                                        good_xids_only=good_xids_only,
+                                                        standardize=standardize,
+                                                        ufunc=ufunc,
+                                                        ufunc_kwargs=ufunc_kwargs,
+                                                        )
+    ds_respvec_cat = xr.concat(ds_processed_respvec_list, 'cells')
+
+    ds_respvec_cat = ds_respvec_cat.assign_attrs(attrs)
+    return ds_respvec_cat
+
+
 # %%
 
 
@@ -589,9 +635,9 @@ if __name__ == '__main__':
                                       allowed_imaging_type=imaging_type,
                                       allowed_movie_types=megamat_panel.movies)
 
-        flat_acqs = filter(lambda x: suite2p_helpers.is_3d(x.stat_file(
+        flat_acqs = list(filter(lambda x: suite2p_helpers.is_3d(x.stat_file(
                 relative_to=natmixconfig.NAS_PROC_DIR)),
-                           flat_acqs, )
+                                flat_acqs, ))
 
         stim_idx_keys = ['stim', 'stim_occ']
 
