@@ -123,28 +123,64 @@ def compute_mean_trial_image(da_reg, stim_ict, baseline_win=(-5.0, -0.5), peak_w
     # compute mean images
     peak_mean = da_reg.sel(time=slice(*stim_peak_win)).mean(dim='time').astype('float32')
 
-    # # compute df images
-    # peak_df = (peak_mean - baseline_mean)
-    # peak_dff = (peak_mean - baseline_mean) / baseline_std
+    data_vars = dict(baseline_mean=baseline_mean,
+                     baseline_std=baseline_std,
+                     peak_mean=peak_mean,
+                     )
+
+    ds_dff_images = xr.Dataset(data_vars=data_vars, )
+
+    return ds_dff_images
+
+
+def compute_quantile_trial_image(da_trial_baseline,
+                                 da_trial_peak,
+                                 baseline_quantile=0.25,
+                                 peak_quantile=0.95,
+                                 ):
+    """Compute baseline_mean, baseline_std, and peak_mean for a single trial."""
+
+    # t, z, y, x = da_reg.shape
     #
-    # # smooth images
-    # if smooth:
-    #     gaussian_sigma = [0, 0, sigma, sigma]
+    # # make time windows stimulus-centered
+    # stim_b0_win = [stim_ict + x for x in baseline_win]
+    # stim_peak_win = [stim_ict + x for x in peak_win]
     #
-    #     arr_baseline_mean_smoothed = gaussian_filter(baseline_mean.to_numpy(), sigma=gaussian_sigma)
-    #     arr_peak_mean_smoothed = gaussian_filter(peak_mean.to_numpy(), sigma=gaussian_sigma)
-    #     baseline_mean = xr.DataArray(arr_baseline_mean_smoothed,
-    #                                  dims=['trial', 'z', 'y', 'x'])
-    #     peak_mean = xr.DataArray(arr_peak_mean_smoothed, dims=['trial', 'z', 'y', 'x'])
-    #
-    # # construct ds_dff
-    # data_vars = dict(peak_dff=peak_dff,
-    #                  peak_df=peak_df,
-    #                  baseline_mean=baseline_mean,
-    #                  baseline_std=baseline_std,
-    #                  peak_mean=peak_mean,
-    #                  )
-    # construct ds_trial_images
+    # # da_baseline = da_reg.sel(time=slice(*stim_b0_win)).clip()
+    # # da_peak = da_reg.sel(time=slice(*stim_peak_win))
+    # da_baseline = da_reg.sel(time=slice(*stim_b0_win))
+    # da_peak = da_reg.sel(time=slice(*stim_peak_win))
+
+    print('\tbaseline quantile...')
+    # compute baseline images
+    # baseline_mean = (da_trial_baseline
+    #                  .quantile(baseline_quantile,
+    #                            dim='time',
+    #                            interpolation='linear')
+    #                  .astype('float32')
+    #                  ).drop_vars('quantile')
+
+    # baseline_mean = (da_trial_baseline
+    #                  .quantile(baseline_quantile,
+    #                            dim='time',
+    #                            interpolation='linear')
+    #                  .astype('float32')
+    #                  ).drop_vars('quantile')
+    baseline_mean = da_trial_baseline.mean(dim='time').astype('float32')
+    print('\tbaseline std...')
+    baseline_std = da_trial_baseline.std(dim='time').astype('float32')
+
+    # compute mean images
+    print('\tpeak quantile...')
+    # peak_mean = (da_trial_peak
+    #              .quantile(peak_quantile,
+    #                        dim='time',
+    #                        interpolation='linear')
+    #              .astype('float32')
+    #              ).drop_vars('quantile')
+
+    peak_mean = da_trial_peak.max(dim='time').astype('float32')
+
     data_vars = dict(baseline_mean=baseline_mean,
                      baseline_std=baseline_std,
                      peak_mean=peak_mean,
@@ -175,6 +211,46 @@ def compute_mean_trial_images(da_reg, olf_ict=None, stim_list=None,
             trials=np.arange(len(olf_ict)),
             stim=('trials', stim_list))
     return ds_dffs
+
+
+def compute_quantile_trial_images(da_reg, olf_ict=None, stim_list=None,
+                                  baseline_win=(-5.0, -0.5),
+                                  peak_win=(0.05, 3.0),
+                                  baseline_quantile=0.25,
+                                  peak_quantile=0.95,
+                                  ):
+    """Compute baseline_mean, baseline_std, and peak_mean for all trials trial."""
+    if olf_ict is None:
+        olf_ict = da_reg.attrs['olf_ict']
+    if stim_list is None:
+        stim_list = da_reg.attrs['stim']
+
+    ds_quantile_list = []
+    n_trials = len(olf_ict)
+
+    for itrial, ict in enumerate(olf_ict):
+        # make time windows stimulus-centered
+        stim_b0_win = [ict + x for x in baseline_win]
+        stim_peak_win = [ict + x for x in peak_win]
+
+        # crop movie around ict
+        da_baseline = da_reg.sel(time=slice(*stim_b0_win))
+        da_peak = da_reg.sel(time=slice(*stim_peak_win))
+
+        print('computing quantiles for trial {:02d}/{:02d}'.format(itrial+1, n_trials))
+        ds_quantile_list.append(compute_quantile_trial_image(da_baseline,
+                                                             da_peak,
+                                                             baseline_quantile=baseline_quantile,
+                                                             peak_quantile=peak_quantile
+                                                             )
+                                )
+
+    ds_quantile = xr.concat(ds_quantile_list, dim='trials')
+    ds_quantile = ds_quantile.assign_attrs(da_reg.attrs)
+    ds_quantile = ds_quantile.assign_coords(
+            trials=np.arange(len(olf_ict)),
+            stim=('trials', stim_list))
+    return ds_quantile
 
 
 def compute_dff_images(ds_trial_images, sigma_baseline=0.5, sigma_peak=0.5,
@@ -224,31 +300,54 @@ def compute_dff_images(ds_trial_images, sigma_baseline=0.5, sigma_peak=0.5,
     return ds_dffs
 
 
-# %%
-#     olf_ict = da_reg.attrs['olf_ict']
-#     n_trials = len(olf_ict)
-#
-#     b0_wins = [(ict + x for x in baseline_win) for ict in olf_ict]
-#     peak_wins = [(ict + x for x in peak_win) for ict in olf_ict]
-#
-#     baseline_mean_list = [da_reg.sel(time=slice(*win)).mean(dim='time') for win in b0_wins]
-#     baseline_std_list = [da_reg.sel(time=slice(*win)).std(dim='time') for win in b0_wins]
-#     peak_mean = [da_reg.sel(time=slice(*win)).mean(dim='time') for win in peak_wins]
-#     peak_dff =
-#
-#     _, z, y, x = da_reg.shape
-#
-#     attrs = copy.deepcopy(da_reg.attrs)
-#
-#     data_vars = dict(peak_dff=peak_dff,
-#                      baseline_mean=baseline_mean,
-#                      baseline_std=baseline_std,
-#                      peak_mean=peak_mean,
-#                      )
-#     ds_dff = xr.Dataset(data_vars=data_vars,
-#                         dims=['trial', 'z', 'y', 'x'],
-#                         )
-#     return peak_dff
+def compute_quantile_images(ds_trial_images, sigma_baseline=0.5, sigma_peak=0.5,
+                            smooth_baseline=True, smooth_peak=False,
+                            baseline_quantile=0.25,
+                            peak_quantile=0.95,
+                            ):
+    """Compute df and dff images from baseline_mean, baseline_std, and peak_mean images."""
+
+    # smooth baseline images
+    unsmoothed_baseline_mean = copy.deepcopy(ds_trial_images.baseline_mean)
+    unsmoothed_peak_mean = copy.deepcopy(ds_trial_images.peak_mean)
+
+    if smooth_baseline:
+        arr_baseline_mean_smoothed = gaussian_filter(ds_trial_images.baseline_mean.to_numpy(),
+                                                     sigma=[0, 0, sigma_baseline, sigma_baseline])
+        baseline_mean = xr.DataArray(arr_baseline_mean_smoothed,
+                                     dims=['trials', 'z', 'y', 'x'])
+    else:
+        baseline_mean = ds_trial_images.baseline_mean
+
+    # smooth peak images
+    if smooth_peak:
+        arr_peak_mean_smoothed = gaussian_filter(ds_trial_images.peak_mean.to_numpy(),
+                                                 sigma=[0, 0, sigma_peak, sigma_peak])
+        peak_mean = xr.DataArray(arr_peak_mean_smoothed, dims=['trials', 'z', 'y', 'x'])
+
+    else:
+        peak_mean = ds_trial_images.peak_mean
+
+    # compute df images
+    peak_df = peak_mean - baseline_mean
+    peak_dff = peak_df / baseline_mean
+
+    # construct ds_dff
+    data_vars = dict(peak_dff=peak_dff,
+                     peak_df=peak_df,
+                     baseline_mean=baseline_mean,
+                     baseline_std=ds_trial_images.baseline_std,
+                     peak_mean=peak_mean,
+                     unsmoothed_baseline_mean=unsmoothed_baseline_mean,
+                     unsmoothed_peak_mean=unsmoothed_peak_mean
+                     )
+    ds_qimgs = xr.Dataset(data_vars=data_vars, )
+    ds_qimgs = ds_qimgs.assign_attrs(copy.deepcopy(ds_trial_images.attrs))
+
+    # ds_dffs = ds_dffs.assign_coords(
+    #         trials=np.arange(ds_dffs.dims['trial']),
+    #         stim=('trials', ds_trial_images.stim))
+    return ds_qimgs
 
 
 def load_registered_suite2p_movie_3d(stat_file):
@@ -262,7 +361,7 @@ def load_registered_suite2p_movie_3d(stat_file):
     """
     reg_stack = suite2p_helpers.load_combined_reg_tiffs(stat_file, drop_flyback=False)
     t, z, y, x = reg_stack.shape
-    da_reg = xr.DataArray(reg_stack//2,
+    da_reg = xr.DataArray(reg_stack // 2,
                           dims=['time', 'z', 'y', 'x'],
                           attrs=dict(
                                   stat_file=str(stat_file)
@@ -327,18 +426,59 @@ def clip_movie_by_quantiles(da_reg, q=(0.01, 0.995)):
     return da_reg_clip
 
 
-def main(flat_acq, baseline_win=(-5.0, -0.5), peak_win=(0.05, 3.0), save_netcdf=False):
+def main(flat_acq, baseline_win=(-5.0, -0.5), peak_win=(0.05, 3.0),
+         sigma_baseline=1,
+         sigma_peak=0.5,
+         smooth_baseline=True,
+         smooth_peak=False,
+         dff_method='quantile',  # or 'dff'
+         baseline_quantile=0.25,
+         peak_quantile=0.95,
+         save_netcdf=False):
+    """For kc_soma, do the following:
+
+    >>> compute_dff_images(ds_trial_images,
+                             sigma_baseline=1,
+                             sigma_peak=0.5,
+                             smooth_baseline=True,
+                             smooth_peak=False)
+
+
+    For PN boutons, do the following:
+    ```
+        compute_dff_images(ds_trial_images,
+                                 sigma_baseline=0.5,
+                                 sigma_peak=0.5,
+                                 smooth_baseline=True,
+                                 smooth_peak=True)
+    ```
+
+
+    """
+    "loading registered movie."
     da_reg = load_registered_suite2p_movie_as_xarray_from_flacq(flat_acq)
 
     # da_reg_clip = clip_movie_by_quantiles(da_reg, q=(0.01, 0.995))
-    ds_trial_images = compute_mean_trial_images(da_reg,
-                                                baseline_win=baseline_win,
-                                                peak_win=peak_win)
+    if dff_method == 'dff':
+        print('computing dff trial images')
+        ds_trial_images = compute_mean_trial_images(da_reg,
+                                                    baseline_win=baseline_win,
+                                                    peak_win=peak_win)
+
+    elif dff_method == 'quantile':
+        print('computing quantile trial images')
+        ds_trial_images = compute_quantile_trial_images(da_reg,
+                                                        # olf_ict=None, stim_list=None,
+                                                        baseline_win=baseline_win,
+                                                        peak_win=peak_win,
+                                                        baseline_quantile=baseline_quantile,
+                                                        peak_quantile=peak_quantile,
+                                                        )
     ds_dffs = compute_dff_images(ds_trial_images,
-                                 sigma_baseline=1,
-                                 sigma_peak=0.5,
-                                 smooth_baseline=True,
-                                 smooth_peak=False)
+                                 sigma_baseline=sigma_baseline,
+                                 sigma_peak=sigma_peak,
+                                 smooth_baseline=smooth_baseline,
+                                 smooth_peak=smooth_peak)
 
     dff_images_dir = write_dff_images_to_tiff_hyperstack(ds_dffs)
     dff_trial_images_dir = write_dff_trial_images(ds_dffs)
