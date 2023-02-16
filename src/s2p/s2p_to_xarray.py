@@ -1,17 +1,17 @@
 import copy
 import json
-from pathlib import Path
 from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pydantic
-import utils2p
 import xarray as xr
+from matplotlib.backends.backend_pdf import PdfPages
 from scipy.io import loadmat
 from scipy.ndimage import gaussian_filter1d, percentile_filter
 from scipy.stats import zscore
 
+import natmixconfig
 import pathparse
 import trial_tensors
 import xr_helpers
@@ -19,15 +19,15 @@ from pydantic_models import FlatFlyAcquisitions
 # import suite2p
 # import rastermap
 # from rastermap.mapping import Rastermap
-from s2p import rasterplot
+from s2p import rasterplot, suite2p_helpers
 
 plt.rcParams.update({'pdf.fonttype': 42,
                      'text.usetex': False})
 
 # Set project directory
-NAS_PRJ_DIR = Path("/local/storage/Remy/natural_mixtures")
-NAS_PROC_DIR = NAS_PRJ_DIR.joinpath("processed_data")
-
+from natmixconfig import *
+# NAS_PRJ_DIR = Path("/local/storage/Remy/natural_mixtures")
+# NAS_PROC_DIR = NAS_PRJ_DIR.joinpath("processed_data")
 
 
 def process_traces(cells_x_time, win=90):
@@ -92,11 +92,11 @@ def traces_2_trial_tensors(xrds):
 def suite2p_2_xarray(Fall, ts, attrs):
     """ Converts suite2p outputs into xarray dataset containing F, Fneu, and Fc. """
     if isinstance(Fall, Path):
+        stat_file = Fall.with_name('stat.npy')
         Fall = loadmat(Fall, squeeze_me=True)
 
     iscell, cellprob = Fall['iscell'].T
     iscell = iscell.astype('int')
-    iplane = [int(stat['iplane']) for stat in Fall['stat']]
 
     Fc = Fall['F'] - 0.7 * Fall['Fneu']
     n_cells, T = Fc.shape
@@ -118,7 +118,11 @@ def suite2p_2_xarray(Fall, ts, attrs):
 
     ds = ds.assign_coords(dict(iscell=('cells', iscell)))
     ds = ds.assign_coords(dict(cellprob=('cells', cellprob)))
-    ds = ds.assign_coords(dict(iplane=('cells', iplane)))
+
+    is_multiplane = suite2p_helpers.is_3d(stat_file)
+    if is_multiplane:
+        iplane = [int(stat['iplane']) for stat in Fall['stat']]
+        ds = ds.assign_coords(dict(iplane=('cells', iplane)))
     return ds
 
 
@@ -131,7 +135,12 @@ def flacq_2_xarray_attrs(flacq):
     Returns:
         dict:
     """
-    MOV_DIR = pathparse.flacq2dir(flacq)
+    if isinstance(flacq, dict):
+        MOV_DIR = pathparse.flacq2dir(flacq)
+        xr_attrs = copy.deepcopy(flacq)
+    elif isinstance(flacq, FlatFlyAcquisitions):
+        MOV_DIR = flacq.mov_dir()
+        xr_attrs = flacq.dict()
 
     # load frame and trial timing info
     timestamps = np.load(MOV_DIR.joinpath('timestamps.npy'), allow_pickle=True).item()
@@ -140,21 +149,43 @@ def flacq_2_xarray_attrs(flacq):
         stim_list = json.load(f)
 
     # add time and stim info to attrs
-    xr_attrs = copy.deepcopy(flacq)
     xr_attrs['stack_times'] = timestamps['stack_times']
     xr_attrs['olf_ict'] = timestamps['olf_ict']
     xr_attrs['stim'] = stim_list['stim_list_flatstr']
     return xr_attrs
 
 
-def xrds_suite2p_outputs_xid0_2_xrds_suite2p_output_trials_xid0(xrds_file, save_netcdf=False):
+def xrds_suite2p_outputs_2_trials(xrds_file):
+    """
+    Converts xrds_suite2p_outputs(_xid0_.nc --> xrds_suite2p_output_trials(_xid0).nc
+
+    Resamples/interpolates 2D timeseries data w/ dims ['cells', 'time'] to 3D trial structured data
+    w/ dims ['trials', 'cells', 'time'].
+
+    - Copy attrs
+    - For non-dim coordinates,
+    """
+    ds = xr.load_dataset(xrds_file)
+    attrs = ds.attrs.copy()
+    return None
+
+
+def xrds_suite2p_outputs_xid0_2_xrds_suite2p_output_trials_xid0(xrds_file, trial_ts=None):
     """Converts xrds_suite2p_outputs_xid0.nc --> xrds_suite2p_output_trials_xid0.nc
 
     Args:
         xrds_file (object):
+        trial_ts ():
 
     """
-    ds = xr.load_dataset(xrds_file)
+    if trial_ts is None:
+        trial_ts = np.arange(-5, 20, 0.5)
+
+    if isinstance(xrds_file, Path):
+        ds = xr.load_dataset(xrds_file)
+    elif isinstance(xrds_file, xr.Dataset):
+        ds = xrds_file
+
     attrs = ds.attrs.copy()
 
     dim_names = list(ds.coords.dims)
@@ -163,14 +194,13 @@ def xrds_suite2p_outputs_xid0_2_xrds_suite2p_output_trials_xid0(xrds_file, save_
 
     n_trials = len(ds.attrs['stim'])
     cells = ds.coords['cells'].to_numpy()
-    trial_ts = np.arange(-5, 20, 0.5)
 
     data_vars = {}
     for k, v in ds.data_vars.items():
         trials_x_cells_x_time = trial_tensors.make_trial_tensor(v.to_numpy(),
-                                            ts=ds.time.to_numpy(),
-                                            stim_ict=ds.attrs['olf_ict'],
-                                            trial_ts=trial_ts)
+                                                                ts=ds.time.to_numpy(),
+                                                                stim_ict=ds.attrs['olf_ict'],
+                                                                trial_ts=trial_ts)
         data_vars[k] = (("trials", "cells", "time"), trials_x_cells_x_time)
 
     ds_trial_tensors = xr.Dataset(
@@ -188,10 +218,9 @@ def xrds_suite2p_outputs_xid0_2_xrds_suite2p_output_trials_xid0(xrds_file, save_
         if 'time' not in ds.coords[cname].dims:
             ds_trial_tensors = ds_trial_tensors.assign_coords({cname: (ds.coords[cname].dims, ds.coords[cname].values)})
 
-    if save_netcdf:
-        ds_trial_tensors.to_netcdf(xrds_file.with_name('xrds_suite2p_output_trials_xid0.nc'))
-
     return ds_trial_tensors
+
+
 
 
 def flacq_2_xrds_suite2p_outputs(flat_acq, save_netcdf=False):
@@ -200,10 +229,12 @@ def flacq_2_xrds_suite2p_outputs(flat_acq, save_netcdf=False):
     Returns:
         xr.Dataset: Dataset containing traces F, Fc, Fneu,
     """
-    MOV_DIR = pathparse.flacq2dir(flat_acq)
+
+    # MOV_DIR = pathparse.flacq2dir(flat_acq)
+    MOV_DIR = flat_acq.mov_dir()
 
     # load thorimage metadata
-    meta = utils2p.Metadata(MOV_DIR.joinpath('Experiment.xml'))
+    # meta = utils2p.Metadata(MOV_DIR.joinpath('Experiment.xml'))
 
     # load frame and trial timing info
     timestamps = np.load(MOV_DIR.joinpath('timestamps.npy'), allow_pickle=True).item()
@@ -212,10 +243,12 @@ def flacq_2_xrds_suite2p_outputs(flat_acq, save_netcdf=False):
     with open(MOV_DIR.joinpath('stim_list.json'), 'r') as f:
         stim_list = json.load(f)
 
-    fname_Fall = list(MOV_DIR.rglob("suite2p/combined/Fall.mat"))[0]
+    stat_file = flat_acq.stat_file(relative_to=natmixconfig.NAS_PROC_DIR)
+    fname_Fall = stat_file.with_name('Fall.mat')
+    # fname_Fall = list(MOV_DIR.rglob("suite2p/combined/Fall.mat"))[0]
 
     # add time and stim info to attrs
-    attrs = copy.deepcopy(flat_acq)
+    attrs = copy.deepcopy(flat_acq.dict())
     attrs['stack_times'] = timestamps['stack_times']
     attrs['olf_ict'] = timestamps['olf_ict']
     attrs['stim'] = stim_list['stim_list_flatstr']
@@ -225,7 +258,7 @@ def flacq_2_xrds_suite2p_outputs(flat_acq, save_netcdf=False):
     ds = suite2p_2_xarray(fname_Fall, timestamps['stack_times'], attrs)
 
     if save_netcdf:
-        ds.to_netcdf(fname_Fall.with_name('xrds_suite2p_outputs.nc'))
+        ds.to_netcdf(stat_file.with_name('xrds_suite2p_outputs.nc'))
 
     return ds
 
@@ -243,7 +276,7 @@ if __name__ == '__main__':
     # %% Save to xrds_s2p_traces.nc in suite2p/combined folder
     # also copied to natural_mixtures/report_data
 
-    flacqs_to_process = flat_linked_acquisitions[12:19]
+    flacqs_to_process = flat_linked_acquisitions[-3:]
 
     print(f"flacqs_to_process:")
     print(f"-----------------")
@@ -264,8 +297,26 @@ if __name__ == '__main__':
 
         # create xrds_suite2p_outputs.nc
         # -------------------------------------
+
         xrds_suite2p_outputs = flacq_2_xrds_suite2p_outputs(flacq.dict(), save_netcdf=True)
         print(f"\n\t- saved {stat_file.relative_to(mov_dir).with_name('xrds_suite2p_outputs.nc')}")
+
+        # --------------------------------------------
+        # run initial rastermap embedding
+        # --------------------------------------------
+        rasterplot.run_initial_rastermap_embedding(stat_file)
+
+        xrds_file = stat_file.with_name("xrds_suite2p_outputs.nc")
+        fig1, axarr1 = rasterplot.plot_initial_rastermap_clustering(xrds_file)
+        plt.show()
+
+        pdf_file = xrds_file.with_name('rastermap_embedding_allcells.pdf')
+        if ~pdf_file.is_file():
+            with PdfPages(pdf_file) as pdf:
+                pdf.savefig(fig1)
+                print('\trastermap_embedding_allcells.pdf saved.')
+        else:
+            print(f"\tpdf file already exists: {pdf_file.relative_to(NAS_PROC_DIR)}")
 
         # -------------------------------------------
         # create xrds_suite2p_traces.nc
@@ -281,6 +332,8 @@ if __name__ == '__main__':
             xrds_suite2p_traces[k] = (('cells', 'time'), v)
         xrds_suite2p_traces.to_netcdf(stat_file.with_name('xrds_suite2p_traces.nc'))
         print(f"\t- saved {stat_file.relative_to(mov_dir).with_name('xrds_suite2p_traces.nc')}")
+
+
         # -------------------------------------------
         # create xrds_suite2p_trials.nc
         # -------------------------------------------
@@ -304,8 +357,8 @@ if __name__ == '__main__':
         print(f"\t- saved {stat_file.relative_to(mov_dir).with_name('xrds_suite2p_trials.nc')}")
         print(f"done")
 
-#xrds_file_list = list(NAS_PROC_DIR.rglob("xrds_suite2p_outputs_xid0.nc"))
-#%%
+# xrds_file_list = list(NAS_PROC_DIR.rglob("xrds_suite2p_outputs_xid0.nc"))
+# %%
 # #%%
 # for flacq in flacqs_to_process:
 #     MOV_DIR = pathparse.flacq2dir(flacq)
